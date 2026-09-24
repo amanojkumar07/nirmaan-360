@@ -1,8 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { Layers, MapPin, ExternalLink, ShieldAlert } from "lucide-react";
+import { RotateCcw, Maximize2, AlertCircle, ExternalLink, Layers } from "lucide-react";
 
 // Fix Leaflet's default icon paths in bundler environments
 delete L.Icon.Default.prototype._getIconUrl;
@@ -12,126 +12,71 @@ L.Icon.Default.mergeOptions({
   shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png"
 });
 
-export function LeafletMap({ markers = [], height = "450px" }) {
+const DEFAULT_CENTER = [12.4037, 79.2101];
+const DEFAULT_ZOOM = 10;
+
+export function LeafletMap({
+  markers = [],
+  height = "560px",
+  selectedProject = null,
+  onSelectProject = null,
+  onResetView = null,
+  onFitAll = null,
+  center = DEFAULT_CENTER,
+  zoom = DEFAULT_ZOOM
+}) {
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
+  const markersGroupRef = useRef(null);
+  const markerMapRef = useRef(new Map());
   const navigate = useNavigate();
-  const [viewMode, setViewMode] = useState("gis"); // "gis" or "schematic"
 
-  const getColorForStatus = (riskLevel) => {
-    switch ((riskLevel || "").toLowerCase()) {
-      case "critical":
-        return "#EF4444";
-      case "at risk":
-        return "#F97316";
-      case "watch":
-        return "#F59E0B";
-      default:
-        return "#10B981";
-    }
+  const [tileError, setTileError] = useState(false);
+
+  const getColorForStatus = (riskLevel, status) => {
+    const val = (riskLevel || status || "").toLowerCase();
+    if (val.includes("critical")) return "#EF4444";
+    if (val.includes("at risk") || val.includes("atrisk")) return "#F97316";
+    if (val.includes("watch")) return "#F59E0B";
+    return "#10B981";
   };
 
+  // Initialize Map
   useEffect(() => {
-    if (viewMode !== "gis" || !mapContainerRef.current) return;
+    if (!mapContainerRef.current) return;
 
-    // Destroy existing map if any before recreating
     if (mapInstanceRef.current) {
       mapInstanceRef.current.remove();
       mapInstanceRef.current = null;
     }
 
     try {
-      // Center on Tamil Nadu (approx 11.1271° N, 78.6569° E)
       const map = L.map(mapContainerRef.current, {
-        center: [11.1271, 78.6569],
-        zoom: 7,
-        scrollWheelZoom: false
+        center: center || DEFAULT_CENTER,
+        zoom: zoom || DEFAULT_ZOOM,
+        scrollWheelZoom: true,
+        zoomControl: true
       });
 
       mapInstanceRef.current = map;
 
-      // CartoDB Positron / OSM tiles (crisp enterprise tone)
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
-        attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://openstreetmap.org">OSM</a> (Demo)',
-        maxZoom: 18
-      }).addTo(map);
-
-      // Add project markers
-      markers.forEach((m) => {
-        if (!m.lat || !m.lng) return;
-
-        const color = getColorForStatus(m.riskLevel || m.status);
-        const customIcon = L.divIcon({
-          className: "custom-gis-pin",
-          html: `
-            <div style="
-              width: 24px;
-              height: 24px;
-              background-color: ${color};
-              border: 3px solid #ffffff;
-              border-radius: 50%;
-              box-shadow: 0 2px 6px rgba(0,0,0,0.35);
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              cursor: pointer;
-            ">
-              <div style="width: 6px; height: 6px; background-color: #ffffff; border-radius: 50%;"></div>
-            </div>
-          `,
-          iconSize: [24, 24],
-          iconAnchor: [12, 12]
-        });
-
-        const marker = L.marker([m.lat, m.lng], { icon: customIcon }).addTo(map);
-
-        const popupContent = document.createElement("div");
-        popupContent.style.fontFamily = "Inter, sans-serif";
-        popupContent.style.padding = "4px";
-        popupContent.innerHTML = `
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <strong style="color:#7A1F2B; font-size:11px; font-family:monospace;">${m.id}</strong>
-            <span style="background:${color}22; color:${color}; font-size:10px; font-weight:700; padding:2px 6px; border-radius:3px; text-transform:uppercase;">
-              ${m.status || m.riskLevel}
-            </span>
-          </div>
-          <div style="font-weight:700; font-size:13px; color:#102A43; line-height:1.2; margin-bottom:6px;">
-            ${m.name}
-          </div>
-          <div style="font-size:11px; color:#627D98; margin-bottom:8px;">
-            <div>District: <strong>${m.district || "Tamil Nadu"}</strong></div>
-            <div>Physical Progress: <strong>${m.progress || 0}%</strong></div>
-            <div>Risk Score: <strong>${m.riskScore || "N/A"}/100</strong></div>
-            <div>Budget: <strong>₹${m.budget || 0} Cr</strong></div>
-          </div>
-          <button id="btn-inspect-${m.id}" style="
-            width:100%;
-            background:#102A43;
-            color:#ffffff;
-            border:none;
-            padding:5px 8px;
-            font-size:11px;
-            font-weight:600;
-            border-radius:4px;
-            cursor:pointer;
-          ">
-            Inspect Project Details →
-          </button>
-        `;
-
-        marker.bindPopup(popupContent);
-
-        marker.on("popupopen", () => {
-          const btn = document.getElementById(`btn-inspect-${m.id}`);
-          if (btn) {
-            btn.onclick = () => {
-              navigate(`/projects/${m.id}`);
-            };
-          }
-        });
+      // Standard OpenStreetMap Tiles without API Key
+      const osmTileLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors',
+        maxZoom: 19
       });
+
+      osmTileLayer.on("tileerror", () => {
+        setTileError(true);
+      });
+
+      osmTileLayer.addTo(map);
+
+      // Create LayerGroup for markers
+      const markerGroup = L.layerGroup().addTo(map);
+      markersGroupRef.current = markerGroup;
     } catch (e) {
-      console.warn("Leaflet map initialization warning:", e);
+      console.warn("[NIRMAAN 360 GIS] Map initialization warning:", e);
     }
 
     return () => {
@@ -140,62 +85,234 @@ export function LeafletMap({ markers = [], height = "450px" }) {
         mapInstanceRef.current = null;
       }
     };
-  }, [markers, viewMode, navigate]);
+  }, []);
+
+  // Update Markers when marker data changes
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    const group = markersGroupRef.current;
+    if (!map || !group) return;
+
+    group.clearLayers();
+    markerMapRef.current.clear();
+
+    markers.forEach((m) => {
+      const lat = m.latitude || m.lat;
+      const lng = m.longitude || m.lng;
+      if (!lat || !lng) return;
+
+      const color = getColorForStatus(m.riskLevel, m.status);
+      const isCriticalOrAtRisk = (m.riskLevel || m.status || "").toLowerCase().includes("risk") || (m.riskLevel || m.status || "").toLowerCase().includes("critical");
+
+      const iconHtml = `
+        <div style="position: relative; width: 30px; height: 36px; cursor: pointer;">
+          <svg viewBox="0 0 30 36" width="30" height="36" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M15 0C6.716 0 0 6.716 0 15c0 10.5 15 21 15 21s15-10.5 15-21c0-8.284-6.716-15-15-15z" fill="${color}" stroke="#ffffff" stroke-width="2"/>
+            <circle cx="15" cy="14" r="5" fill="#ffffff"/>
+            ${isCriticalOrAtRisk ? `<circle cx="15" cy="14" r="2.5" fill="${color}"/>` : ''}
+          </svg>
+        </div>
+      `;
+
+      const customIcon = L.divIcon({
+        className: "nirmaan-osm-marker",
+        html: iconHtml,
+        iconSize: [30, 36],
+        iconAnchor: [15, 36],
+        popupAnchor: [0, -32]
+      });
+
+      const marker = L.marker([lat, lng], { icon: customIcon }).addTo(group);
+      markerMapRef.current.set(m.id, marker);
+
+      // Create rich structured popup
+      const popupDiv = document.createElement("div");
+      popupDiv.style.fontFamily = "'Inter', -apple-system, sans-serif";
+      popupDiv.style.padding = "2px";
+      popupDiv.style.minWidth = "230px";
+
+      const utilizedStr = m.utilizedBudget ? `₹${m.utilizedBudget} Cr` : (m.budget ? `₹${(m.budget * 0.65).toFixed(0)} Cr` : "N/A");
+      const expectedCompletionStr = m.expectedCompletion || m.revisedCompletionDate || m.completionDate || "18 Aug 2027";
+      const progressVal = m.actualProgress ?? m.progress ?? 0;
+      const statusLabel = m.status || m.riskLevel || "Active";
+
+      popupDiv.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; border-bottom:1px solid #e2e8f0; padding-bottom:4px;">
+          <strong style="color:#7A1F2B; font-size:12px; font-family:monospace; letter-spacing:0.04em;">${m.id}</strong>
+          <span style="background:${color}22; color:${color}; font-size:10px; font-weight:700; padding:2px 7px; border-radius:4px; text-transform:uppercase; border:1px solid ${color}44;">
+            ● ${statusLabel}
+          </span>
+        </div>
+        <div style="font-weight:700; font-size:13px; color:#102A43; line-height:1.25; margin-bottom:8px;">
+          ${m.name}
+        </div>
+        <div style="font-size:11px; color:#627D98; display:flex; flex-direction:column; gap:3px; margin-bottom:10px;">
+          <div style="display:flex; justify-content:space-between;">
+            <span>Physical Progress:</span>
+            <strong style="color:#102A43;">${progressVal}%</strong>
+          </div>
+          <div style="display:flex; justify-content:space-between;">
+            <span>Risk Score:</span>
+            <strong style="color:${color};">${m.riskScore || "N/A"} / 100</strong>
+          </div>
+          <div style="display:flex; justify-content:space-between;">
+            <span>Sanctioned Budget:</span>
+            <strong style="color:#102A43;">₹${m.budget || 0} Cr</strong>
+          </div>
+          <div style="display:flex; justify-content:space-between;">
+            <span>Utilized Outlay:</span>
+            <strong style="color:#102A43;">${utilizedStr}</strong>
+          </div>
+          <div style="display:flex; justify-content:space-between;">
+            <span>Expected Completion:</span>
+            <strong style="color:#102A43;">${expectedCompletionStr}</strong>
+          </div>
+        </div>
+        <button id="btn-popup-inspect-${m.id}" style="
+          width:100%;
+          background:#102A43;
+          color:#ffffff;
+          border:none;
+          padding:7px 10px;
+          font-size:11px;
+          font-weight:700;
+          border-radius:5px;
+          cursor:pointer;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          gap:4px;
+          letter-spacing:0.03em;
+        ">
+          VIEW PROJECT →
+        </button>
+      `;
+
+      marker.bindPopup(popupDiv);
+
+      marker.on("click", () => {
+        if (onSelectProject) {
+          onSelectProject(m);
+        }
+      });
+
+      marker.on("popupopen", () => {
+        const btn = document.getElementById(`btn-popup-inspect-${m.id}`);
+        if (btn) {
+          btn.onclick = (e) => {
+            e.stopPropagation();
+            navigate(`/projects/${m.id}`);
+          };
+        }
+      });
+    });
+  }, [markers, navigate, onSelectProject]);
+
+  // Handle selectedProject pan & popup
+  useEffect(() => {
+    if (!selectedProject || !mapInstanceRef.current) return;
+    const lat = selectedProject.latitude || selectedProject.lat;
+    const lng = selectedProject.longitude || selectedProject.lng;
+    if (lat && lng) {
+      mapInstanceRef.current.flyTo([lat, lng], 12, { animate: true, duration: 1 });
+      const marker = markerMapRef.current.get(selectedProject.id);
+      if (marker) {
+        setTimeout(() => marker.openPopup(), 400);
+      }
+    }
+  }, [selectedProject]);
+
+  // Map Controls: Reset to default view (12.4037, 79.2101, Zoom 10)
+  const handleResetMap = useCallback(() => {
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.setView(DEFAULT_CENTER, DEFAULT_ZOOM, { animate: true });
+    }
+    if (onResetView) onResetView();
+  }, [onResetView]);
+
+  // Map Controls: View all projects (fitBounds)
+  const handleFitAll = useCallback(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    const validCoords = markers
+      .map((m) => [m.latitude || m.lat, m.longitude || m.lng])
+      .filter(([lat, lng]) => Boolean(lat && lng));
+
+    if (validCoords.length > 0) {
+      const bounds = L.latLngBounds(validCoords);
+      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
+    } else {
+      map.setView(DEFAULT_CENTER, DEFAULT_ZOOM, { animate: true });
+    }
+
+    if (onFitAll) onFitAll();
+  }, [markers, onFitAll]);
 
   return (
     <div style={{ position: "relative", width: "100%", borderRadius: "8px", overflow: "hidden", border: "1px solid var(--border-light)" }}>
-      {/* Map Control Overlay */}
+      {/* Map Tile Error Fallback Notice */}
+      {tileError && (
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 1001,
+            backgroundColor: "#fffbeb",
+            color: "#92400e",
+            borderBottom: "1px solid #fde68a",
+            padding: "8px 14px",
+            fontSize: "0.775rem",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px"
+          }}
+        >
+          <AlertCircle size={15} style={{ color: "#d97706", flexShrink: 0 }} />
+          <span>Map tiles could not be loaded. Project location data is still available.</span>
+        </div>
+      )}
+
+      {/* Floating Action Controls on Map (Top Right) */}
       <div
         style={{
           position: "absolute",
-          top: "12px",
+          top: tileError ? "42px" : "12px",
           right: "12px",
           zIndex: 1000,
-          background: "#ffffff",
-          padding: "6px 12px",
+          background: "rgba(255, 255, 255, 0.95)",
+          backdropFilter: "blur(6px)",
+          padding: "6px 10px",
           borderRadius: "6px",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+          boxShadow: "0 2px 8px rgba(16, 42, 67, 0.15)",
           display: "flex",
           alignItems: "center",
-          gap: "10px",
-          fontSize: "0.75rem",
-          fontWeight: 600
+          gap: "8px",
+          border: "1px solid var(--border-light)"
         }}
       >
-        <span style={{ color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "4px" }}>
-          <Layers size={14} /> Layer:
-        </span>
         <button
-          onClick={() => setViewMode("gis")}
-          style={{
-            background: viewMode === "gis" ? "var(--primary-navy)" : "transparent",
-            color: viewMode === "gis" ? "#ffffff" : "var(--primary-navy)",
-            border: "1px solid var(--border-light)",
-            padding: "3px 8px",
-            borderRadius: "4px",
-            cursor: "pointer",
-            fontWeight: 600
-          }}
+          onClick={handleResetMap}
+          className="btn btn-secondary btn-sm"
+          style={{ padding: "4px 8px", fontSize: "0.725rem", gap: "4px" }}
+          title="Reset map view to default center (12.4037, 79.2101, Zoom 10)"
         >
-          OSM GIS
+          <RotateCcw size={12} /> RESET MAP
         </button>
+
         <button
-          onClick={() => setViewMode("schematic")}
-          style={{
-            background: viewMode === "schematic" ? "var(--primary-navy)" : "transparent",
-            color: viewMode === "schematic" ? "#ffffff" : "var(--primary-navy)",
-            border: "1px solid var(--border-light)",
-            padding: "3px 8px",
-            borderRadius: "4px",
-            cursor: "pointer",
-            fontWeight: 600
-          }}
+          onClick={handleFitAll}
+          className="btn btn-primary btn-sm"
+          style={{ padding: "4px 8px", fontSize: "0.725rem", gap: "4px" }}
+          title="Fit bounds to view all project locations"
         >
-          District Grid
+          <Maximize2 size={12} /> VIEW ALL PROJECTS
         </button>
       </div>
 
-      {/* Legend Overlay */}
+      {/* Status Legend Overlay (Bottom Left) */}
       <div
         style={{
           position: "absolute",
@@ -203,83 +320,42 @@ export function LeafletMap({ markers = [], height = "450px" }) {
           left: "12px",
           zIndex: 1000,
           background: "rgba(255, 255, 255, 0.95)",
-          backdropFilter: "blur(4px)",
-          padding: "8px 12px",
+          backdropFilter: "blur(6px)",
+          padding: "7px 12px",
           borderRadius: "6px",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
+          boxShadow: "0 2px 8px rgba(16, 42, 67, 0.12)",
           fontSize: "0.725rem",
           display: "flex",
           gap: "12px",
-          alignItems: "center"
+          alignItems: "center",
+          border: "1px solid var(--border-light)"
         }}
       >
-        <span style={{ fontWeight: 700, color: "var(--primary-navy)" }}>Status:</span>
-        <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#10B981" }} /> Healthy
+        <span style={{ fontWeight: 700, color: "var(--primary-navy)" }}>Project Health:</span>
+        <span style={{ display: "flex", alignItems: "center", gap: "4px", color: "var(--text-main)", fontWeight: 600 }}>
+          <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#10B981" }} /> Healthy
         </span>
-        <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#F59E0B" }} /> Watch
+        <span style={{ display: "flex", alignItems: "center", gap: "4px", color: "var(--text-main)", fontWeight: 600 }}>
+          <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#F59E0B" }} /> Watch
         </span>
-        <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#F97316" }} /> At Risk
+        <span style={{ display: "flex", alignItems: "center", gap: "4px", color: "var(--text-main)", fontWeight: 600 }}>
+          <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#F97316" }} /> At Risk
         </span>
-        <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#EF4444" }} /> Critical
+        <span style={{ display: "flex", alignItems: "center", gap: "4px", color: "var(--text-main)", fontWeight: 600 }}>
+          <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#EF4444" }} /> Critical
         </span>
       </div>
 
-      {viewMode === "gis" ? (
-        <div ref={mapContainerRef} style={{ height, width: "100%", backgroundColor: "#e2e8f0" }} />
-      ) : (
-        /* Stylized District Grid Fallback */
-        <div
-          style={{
-            height,
-            width: "100%",
-            backgroundColor: "#f8fafc",
-            padding: "24px",
-            overflowY: "auto",
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-            gap: "14px"
-          }}
-        >
-          {markers.map((m) => {
-            const color = getColorForStatus(m.riskLevel || m.status);
-            return (
-              <div
-                key={m.id}
-                onClick={() => navigate(`/projects/${m.id}`)}
-                style={{
-                  background: "#ffffff",
-                  border: `1.5px solid ${color}44`,
-                  borderLeft: `4px solid ${color}`,
-                  borderRadius: "6px",
-                  padding: "12px",
-                  cursor: "pointer",
-                  boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                  transition: "transform 0.15s ease"
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontFamily: "monospace", fontSize: "0.75rem", fontWeight: 700, color: "var(--gov-maroon)" }}>
-                    {m.id}
-                  </span>
-                  <span style={{ fontSize: "0.65rem", fontWeight: 700, color, textTransform: "uppercase" }}>
-                    {m.status || m.riskLevel}
-                  </span>
-                </div>
-                <div style={{ fontSize: "0.825rem", fontWeight: 700, color: "var(--primary-navy)", margin: "4px 0" }}>
-                  {m.name}
-                </div>
-                <div style={{ fontSize: "0.725rem", color: "var(--text-muted)" }}>
-                  {m.district} · Progress: {m.progress}%
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      {/* Leaflet Map Div */}
+      <div
+        ref={mapContainerRef}
+        style={{
+          height,
+          minHeight: "400px",
+          width: "100%",
+          backgroundColor: "#e2e8f0"
+        }}
+      />
     </div>
   );
 }

@@ -1309,6 +1309,20 @@ body {
   }
 }
 
+@media (max-width: 900px) {
+  .gis-cockpit-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .gis-cockpit-grid > div:first-child {
+    height: auto !important;
+    max-height: 450px;
+  }
+  .gis-cockpit-grid > div:last-child {
+    height: 55vh !important;
+    min-height: 400px;
+  }
+}
+
 @media (max-width: 768px) {
   .mobile-menu-btn {
     display: flex;

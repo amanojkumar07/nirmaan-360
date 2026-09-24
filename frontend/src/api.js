@@ -486,17 +486,26 @@ export async function fetchGisData() {
     markers: INITIAL_PROJECTS.map((p) => ({
       id: p.id,
       name: p.name,
-      lat: p.lat,
-      lng: p.lng,
+      lat: p.lat || p.latitude,
+      lng: p.lng || p.longitude,
+      latitude: p.latitude || p.lat,
+      longitude: p.longitude || p.lng,
+      location: p.location || "",
       district: p.district,
       department: p.department,
       progress: p.actualProgress,
+      actualProgress: p.actualProgress,
       planned: p.plannedProgress,
+      plannedProgress: p.plannedProgress,
       riskScore: p.riskScore,
       riskLevel: p.riskLevel,
       status: p.status,
       budget: p.budget,
-      delayDays: p.delayDays
+      utilizedBudget: p.utilizedBudget || 0,
+      expectedCompletion: p.revisedCompletionDate || p.completionDate || "31 Dec 2026",
+      delayDays: p.delayDays || 0,
+      primaryBottleneck: p.primaryBottleneck || "",
+      contractor: p.contractor || ""
     }))
   };
 }

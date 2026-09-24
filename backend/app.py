@@ -939,6 +939,13 @@ PROJECTS = [
     }
 ]
 
+# Ensure every project supports both latitude/longitude and lat/lng
+for _p in PROJECTS:
+    if "lat" in _p and "latitude" not in _p:
+        _p["latitude"] = _p["lat"]
+    if "lng" in _p and "longitude" not in _p:
+        _p["longitude"] = _p["lng"]
+
 # ==========================================
 # 3. FIELD VERIFICATION REPORTS DATASET (22+ reports)
 # ==========================================
@@ -1881,15 +1888,24 @@ def get_gis_data():
             "name": p["name"],
             "lat": p["lat"],
             "lng": p["lng"],
+            "latitude": p.get("latitude", p["lat"]),
+            "longitude": p.get("longitude", p["lng"]),
             "district": p["district"],
             "department": p["department"],
+            "location": p.get("location", ""),
             "progress": p["actualProgress"],
+            "actualProgress": p["actualProgress"],
             "planned": p["plannedProgress"],
+            "plannedProgress": p["plannedProgress"],
             "riskScore": p["riskScore"],
             "riskLevel": p["riskLevel"],
             "status": p["status"],
             "budget": p["budget"],
-            "delayDays": p["delayDays"]
+            "utilizedBudget": p.get("utilizedBudget", 0),
+            "expectedCompletion": p.get("revisedCompletionDate") or p.get("completionDate", ""),
+            "delayDays": p.get("delayDays", 0),
+            "primaryBottleneck": p.get("primaryBottleneck", ""),
+            "contractor": p.get("contractor", "")
         }
         for p in PROJECTS
     ]
